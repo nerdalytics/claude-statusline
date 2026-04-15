@@ -9,6 +9,8 @@
 !.github/**/
 !.github/**/*.yml
 !.github/**/*.yaml
+!assets/
+!assets/*.png
 
 # Files in root
 !.gitattributes

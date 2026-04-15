@@ -4,6 +4,8 @@ A single-file zsh statusline for [Claude Code](https://claude.com/claude-code).
 It renders up to four rows of live session state and fits them into
 whatever terminal width Claude Code hands it.
 
+![Full statusline at a wide terminal: META row with model name, 7-day and 5-hour rate bars, context bar, and cost; REPO row with branch and dirty-file indicators; TOOLS row with per-tool chips; TASKS row with the in-progress task.](./assets/layout-full.png)
+
 ## Install
 
 Two paths. The non-developer path uses Finder and TextEdit only. The
@@ -408,6 +410,14 @@ fills are never split mid-gradient. When both halves fit, the row renders
 on two physical lines. When no clean split exists, the row stays on one
 line.
 
+META wraps after the rate bars when its width exceeds the terminal:
+
+![META row wrapped: model name, 7-day and 5-hour rate bars on line 1; context bar and cost continuing on line 2.](./assets/layout-meta-wrapped.png)
+
+TOOLS wraps at a chip boundary when there are too many chips to fit:
+
+![TOOLS row wrapped: first tool chips on line 1, remaining chips and the running tool continuing on line 2.](./assets/layout-tools-wrapped.png)
+
 **Pass 2: six-line budget.** Wrapped rows count as 2 physical lines,
 unwrapped rows as 1. When the total exceeds 6 lines:
 
@@ -547,6 +557,11 @@ When META still exceeds the available width after all 17 shrink steps
 have run and the model name is gone, the orchestrator drops REPO, TOOLS,
 and TASKS immediately. META renders on whatever content survived, usually
 just a badge or two.
+
+Under extreme width pressure the script compacts the bars and strips
+almost everything else off. What remains:
+
+![Slim statusline: heavily compacted META row with only the essential segments visible.](./assets/layout-slim.png)
 
 ## Contributing
 
