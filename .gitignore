@@ -1,0 +1,38 @@
+# Ignore everything by default
+*
+*/
+
+# Then explicitly allow what we want
+
+# Folders
+!.github/
+!.github/**/
+!.github/**/*.yml
+!.github/**/*.yaml
+
+# Files in root
+!.gitattributes
+!.gitignore
+!LICENSE
+!mise.toml
+!statusline.zsh
+
+# Allow markdown anywhere
+!**/*.md
+
+# But still ignore these specific patterns everywhere
+**/node_modules/**
+*.tsbuildinfo
+coverage/
+
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
