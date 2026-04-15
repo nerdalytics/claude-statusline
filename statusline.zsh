@@ -220,41 +220,53 @@ sl_input_transcript() {
 # Returns 1 if the transcript is missing or yields no events (caller should
 # short-circuit the downstream passes).
 _sl_parse_transcript_events() {
+    # Always initialise the shared parallel arrays so the downstream stages
+    # can safely iterate even when the transcript is missing, unreadable, or
+    # partially parsed. This is what prevents the TOOLS and TASKS rows from
+    # disappearing during long-running MCP tool calls — a transient jq
+    # failure no longer wipes the rest of the pipeline.
+    typeset -gA _sl_tool_results=()
+    typeset -gA _sl_tool_names=()
+    typeset -gA _sl_tool_targets=()
+    typeset -gA _sl_tool_is_agent=()
+    typeset -ga _sl_tool_order=()
+
     local transcript_path="${SL[_raw.transcript_path]}"
-    [[ -n "$transcript_path" && -f "$transcript_path" ]] || return 1
+    [[ -n "$transcript_path" && -f "$transcript_path" ]] || return 0
 
-    # Single jq pass — mirrors jq_transcript_extract
+    # Per-line parse: slurp the file as raw text, split on newlines, and
+    # let each line parse independently via `try fromjson catch empty`.
+    # A truncated mid-write line, a rewritten file mid-read, or a single
+    # malformed event no longer aborts the whole extract — valid events
+    # keep flowing through.
     local transcript_data
-    transcript_data=$(jq -r '
-        .message.content[]? |
-        if .type == "tool_use" then
-            .name as $name |
-            .id as $id |
-            (
-                if $name == "TaskUpdate" then
-                    [(.input.taskId // ""), (.input.status // "")] | join(":")
-                elif $name == "TaskCreate" then
-                    .input.subject // ""
-                elif .input.file_path then .input.file_path | split("/") | last
-                elif .input.command then (.input.command | split("\n") | first | .[0:40])
-                elif .input.pattern then .input.pattern
-                elif .input.prompt then (.input.prompt | .[0:30])
-                else ""
-                end
-            ) as $target |
-            "use\t\($id)\t\($name)\t\($target)"
-        elif .type == "tool_result" then
-            "result\t\(.tool_use_id)\t\(.is_error // false)"
-        else empty end
+    transcript_data=$(jq --raw-input --slurp --raw-output '
+        split("\n")
+        | map(select(length > 0) | . as $line | try fromjson catch empty)
+        | .[]
+        | .message.content[]?
+        | if .type == "tool_use" then
+              .name as $name |
+              .id as $id |
+              (
+                  if $name == "TaskUpdate" then
+                      [(.input.taskId // ""), (.input.status // "")] | join(":")
+                  elif $name == "TaskCreate" then
+                      .input.subject // ""
+                  elif .input.file_path then .input.file_path | split("/") | last
+                  elif .input.command then (.input.command | split("\n") | first | .[0:40])
+                  elif .input.pattern then .input.pattern
+                  elif .input.prompt then (.input.prompt | .[0:30])
+                  else ""
+                  end
+              ) as $target |
+              "use\t\($id)\t\($name)\t\($target)"
+          elif .type == "tool_result" then
+              "result\t\(.tool_use_id)\t\(.is_error // false)"
+          else empty end
     ' "$transcript_path" 2>/dev/null) || true
-    [[ -n "$transcript_data" ]] || return 1
 
-    # Parse events into parallel arrays (keyed by tool id)
-    typeset -gA _sl_tool_results=()   # id → "false"/"true"
-    typeset -gA _sl_tool_names=()     # id → name
-    typeset -gA _sl_tool_targets=()   # id → target
-    typeset -gA _sl_tool_is_agent=()  # id → 1
-    typeset -ga _sl_tool_order=()     # insertion order of use events
+    [[ -n "$transcript_data" ]] || return 0
 
     local ttype tid tfield1 tfield2
     while IFS=$'\t' read -r ttype tid tfield1 tfield2; do
@@ -395,7 +407,13 @@ _sl_build_task_group_state() {
 }
 
 sl_input_transcript_events() {
-    _sl_parse_transcript_events || return 0
+    # Always run every stage. _sl_parse_transcript_events guarantees the
+    # shared parallel arrays are initialised even when the transcript
+    # cannot be parsed, so aggregation and task-group replay degrade to
+    # "no tools, no tasks" instead of wiping the whole SL[_raw.tools.*]
+    # and SL[_raw.tasks.*] namespaces out from under sl_build_tools /
+    # sl_build_tasks.
+    _sl_parse_transcript_events
     _sl_aggregate_tool_states
     _sl_build_task_group_state
 }
