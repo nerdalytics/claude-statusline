@@ -603,6 +603,40 @@ sl_input_git() {
     SL[_raw.git.deleted]="${_deleted:-0}"
     SL[_raw.git.changed]="${_changed:-0}"
 
+    # conflict detection (purely local — no network required)
+    # 1. Active conflict: MERGE_HEAD, rebase in progress, or unmerged index entries
+    # 2. Predictive: git merge-tree --write-tree (in-memory merge, no working tree changes)
+    SL[_raw.git.conflict]=false
+    local _git_dir_abs
+    _git_dir_abs=$(git -C "$dir" rev-parse --git-dir 2>/dev/null)
+    if [[ -n "$_git_dir_abs" ]]; then
+        [[ "$_git_dir_abs" == /* ]] || _git_dir_abs="${dir}/${_git_dir_abs}"
+        if [[ -f "${_git_dir_abs}/MERGE_HEAD" ]] || \
+           [[ -d "${_git_dir_abs}/rebase-merge" ]] || \
+           [[ -d "${_git_dir_abs}/rebase-apply" ]]; then
+            SL[_raw.git.conflict]=true
+        elif [[ -n "$(git -C "$dir" --no-optional-locks ls-files --unmerged 2>/dev/null)" ]]; then
+            SL[_raw.git.conflict]=true
+        fi
+    fi
+    # predictive conflict: merge-tree against default branch (only when behind)
+    if [[ "${SL[_raw.git.conflict]}" != "true" ]]; then
+        local _behind="${SL[_raw.git.behind]:-0}"
+        if (( _behind > 0 )); then
+            local _default_branch="${SL[_raw.git.default_branch]}"
+            local _merge_target=""
+            for _mb in "$_default_branch" develop main master; do
+                [[ -z "$_mb" ]] && continue
+                git -C "$dir" --no-optional-locks rev-parse --verify "origin/$_mb" >/dev/null 2>&1 && _merge_target="origin/$_mb" && break
+            done
+            if [[ -n "$_merge_target" ]]; then
+                if ! git -C "$dir" merge-tree --write-tree HEAD "$_merge_target" >/dev/null 2>&1; then
+                    SL[_raw.git.conflict]=true
+                fi
+            fi
+        fi
+    fi
+
     # ancestry: based_off (mirrors fetch_git_ancestry)
     local _branch="${SL[_raw.git.branch]}"
     local _default_branch="${SL[_raw.git.default_branch]}"
@@ -909,9 +943,15 @@ sl_build_repo_git_sync() {
     SL[repo.git_sync.visible]=true
 }
 
-# Build: PR mergeable
+# Build: PR mergeable / local conflict
+# Fires when GitHub reports CONFLICTING *or* when a local merge/rebase/unmerged
+# state is detected — whichever is available first.  The local check means the
+# indicator appears even without a PR open or when gh is unreachable.
 sl_build_repo_pr_mergeable() {
-    [[ "${SL[_raw.pr.mergeable]:-}" == "CONFLICTING" ]] || return
+    local _show=false
+    [[ "${SL[_raw.pr.mergeable]:-}" == "CONFLICTING" ]] && _show=true
+    [[ "${SL[_raw.git.conflict]:-}" == "true" ]]        && _show=true
+    [[ "$_show" == "true" ]] || return
     SL[repo.pr_mergeable.text]=" ⚠"
     SL[repo.pr_mergeable.visible]=true
 }
