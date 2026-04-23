@@ -2397,8 +2397,10 @@ _sl_remove_row() {
 }
 
 # Try to wrap a row into 2 output lines at a segment boundary.
-# Finds the last segment boundary where line 1 fits within term_cols.
-# If both halves fit, stores the split index in SL[_layout.<ROW>.wrap_at].
+# Finds the last segment boundary where line 1 fits within term_cols and
+# stores the split index in SL[_layout.<ROW>.wrap_at]. Line 2 is allowed
+# to overflow term_cols — the Phase 3 shrink loop will trim it and re-run
+# _sl_try_wrap so the wrap is preserved instead of collapsing to 1 line.
 _sl_try_wrap() {
     local row=$1 tc=$2
     local -a texts roles
@@ -2425,18 +2427,8 @@ _sl_try_wrap() {
 
     (( best_split == 0 )) && { SL[_layout.${row}.wrap_at]=""; return 1; }
 
-    local second_half=0
-    for (( _tw_i=best_split+1; _tw_i<=n; _tw_i++ )); do
-        sl_display_width "${texts[$_tw_i]}"
-        (( second_half += _sl_dw ))
-    done
-    if (( second_half <= tc )); then
-        SL[_layout.${row}.wrap_at]="$best_split"
-        return 0
-    fi
-
-    SL[_layout.${row}.wrap_at]=""
-    return 1
+    SL[_layout.${row}.wrap_at]="$best_split"
+    return 0
 }
 
 # ── Responsive layout engine ──────────────────────────────────────────────────
