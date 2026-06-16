@@ -246,6 +246,23 @@ install uses a different reserve:
 AUTOCOMPACT_BUFFER=33000
 ```
 
+### `SMART_CONTEXT_LIMIT` (integer)
+
+Set in `~/.claude/statusline.conf`. The token boundary between the **smart
+zone** (precise recall) and the much larger **dumb zone** (vague recall). The
+context-bar badge shows a sharp diamond (`◇ ◆`) while used tokens stay at or
+below this limit, and flips to a filling moon (`○ ◔ ◑ ◕ ●`) once they cross it
+— the cue that it is time to clear the context. It is an absolute token count,
+so the smart zone is a fixed size regardless of the model's context window.
+
+Default is `200000` (200k tokens). There is no published "recall degrades at N
+tokens" figure; treat this as a heuristic and tune it to taste:
+
+```sh
+# ~/.claude/statusline.conf
+SMART_CONTEXT_LIMIT=200000
+```
+
 ### `DEFAULT_BRANCH` (string)
 
 Set in `~/.claude/statusline.conf`. Overrides git default-branch detection.
@@ -283,7 +300,7 @@ Up to three rows. Each row appears only when it has content.
 | **model**       | Model display name (`Claude Sonnet 4`, `Opus 4.6 (1M context)`). Rendered as a teal→purple gradient.                         | Always                                                              |
 | **rate7d**      | 7-day rate-limit usage as a 7-cell bar with a `7d` badge. Purple gradient. Suffix shows time-to-reset (`↻ 5d16h`).            | `rate_limits.seven_day` is in the input JSON                        |
 | **rate5h**      | 5-hour rate-limit usage as a 10-cell bar with a `5h` badge. Cyan gradient. Suffix shows time-to-reset (`↻ 4h19m`).            | `rate_limits.five_hour` is in the input JSON                        |
-| **context**     | Context-window usage as a 10-cell bar. Badge is a progress glyph. Suffix is remaining tokens (`↻ 142.5K`). Green→yellow→red. | `context_window.current_usage` is present and window size > 0       |
+| **context**     | Context-window usage as a 10-cell bar. Badge marks the recall zone — smart (`◇ ◆`) vs dumb (`○ ◔ ◑ ◕ ●`), see below. Suffix is remaining tokens (`↻ 142.5K`). Green→yellow→red. | `context_window.current_usage` is present and window size > 0       |
 | **agent_tokens**| Tokens consumed by sub-agents (`⚡12.3K`). Muted gray.                                                                        | At least one sub-agent reported tokens in the transcript            |
 | **cost**        | Session cost in USD (`$1.42`). Muted gray.                                                                                   | `cost.total_cost_usd` is present and non-zero                       |
 
@@ -338,7 +355,9 @@ Appears when at least one tool has been used this session.
 | `⚡`   | Agent token usage                            | META                                             |
 | `$`   | Session cost                                | META                                             |
 | `◐`   | In progress / currently running             | TOOLS                                            |
-| `○`   | Pending                                     | Context bar badge at low usage                   |
+| `◇ ◆` | Context smart zone (precise recall)         | META context bar                                 |
+| `○ ◔ ◑ ◕ ●` | Context dumb zone (vague recall), filling | META context bar                            |
+| `⊙`   | Context past the usable limit               | META context bar                                 |
 | `✓`   | Completed / CI pass / review approved       | REPO                                             |
 | `✗`   | CI fail / review requested changes          | REPO                                             |
 | `⋯`   | Review required                             | REPO                                             |
@@ -353,17 +372,22 @@ Appears when at least one tool has been used this session.
 | `█`   | Filled bar cell                             | META bars                                        |
 | `▁`   | Empty bar cell                              | META bars                                        |
 
-**Context bar badge.** The glyph inside the context bar indicates how full
-the window is:
+**Context bar badge.** The glyph marks the *recall zone* the session is in,
+not raw fill. The **smart zone** is precise-recall context (used tokens at or
+below `SMART_CONTEXT_LIMIT`, 200k by default); past it is the much larger
+**dumb zone**, where recall turns vague. A sharp diamond covers the small
+smart zone in two states; a moon covers the larger dumb zone in five. The flip
+from `◆` to `○` is the cue that it is time to clear the context.
 
-| Glyph | Usage                    |
-|-------|--------------------------|
-| `○`   | < 20%                    |
-| `◔`   | 20% – 39%                |
-| `◑`   | 40% – 59%                |
-| `◕`   | 60% – 79%                |
-| `●`   | ≥ 80%                    |
-| `⊙`   | Overflow (remaining < 0) |
+| Glyph | Zone | Used tokens |
+|-------|------|-------------|
+| `◇`   | Smart, first half             | ≤ ½ × `SMART_CONTEXT_LIMIT`             |
+| `◆`   | Smart, approaching the line   | ½ × limit … `SMART_CONTEXT_LIMIT`       |
+| `○ ◔ ◑ ◕ ●` | Dumb, filling toward the usable limit | `SMART_CONTEXT_LIMIT` … usable limit |
+| `⊙`   | Overflow                      | past the usable limit (remaining < 0)   |
+
+On a model whose window is smaller than `SMART_CONTEXT_LIMIT` (e.g. a 200k
+window), the whole window is smart, so the badge never leaves the diamond.
 
 ## How it adapts to narrow terminals
 
@@ -464,8 +488,8 @@ the model name itself.
 |  5   | Compact the context bar. Clear fill cells; keep badge and suffix.                                                       |
 |  6   | Clear the 7-day badge text entirely.                                                                                    |
 |  7   | Clear the 5-hour badge text entirely.                                                                                   |
-|  8   | Strip the context badge's leading space and change its role to `spacer`. The progress glyph stays visible longer this way. |
-|  9   | Drop the context progress glyph (`◔ ◕ ◑ ○ ● ⊙`).                                                                         |
+|  8   | Strip the context badge's leading space and change its role to `spacer`. The zone glyph stays visible longer this way. |
+|  9   | Drop the context zone glyph (`◇ ◆ ○ ◔ ◑ ◕ ● ⊙`).                                                                         |
 |  10  | Remove the `↻ ` refresh icon from the 7-day bar suffix.                                                                 |
 |  11  | Remove the `↻ ` refresh icon from the 5-hour bar suffix.                                                                |
 |  12  | Remove the `↻ ` refresh icon from the context bar suffix.                                                               |

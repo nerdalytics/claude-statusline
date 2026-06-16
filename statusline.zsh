@@ -18,11 +18,20 @@ fi
 # ── Config ───────────────────────────────────────────────────────────────────
 AUTOCOMPACT_BUFFER=""
 DEFAULT_BRANCH=""
+# Token boundary between the "smart" zone (precise recall) and the much larger
+# "dumb" zone (vague recall). Used tokens at or below this stay in the smart
+# zone. Absolute tokens, so the smart zone is a fixed size regardless of the
+# model's context window.
+SMART_CONTEXT_LIMIT=200000
 local _conf_file="${HOME}/.claude/statusline.conf"
 [[ -f "$_conf_file" ]] && source "$_conf_file" 2>/dev/null
 # Validate AUTOCOMPACT_BUFFER is numeric
 if [[ -n "$AUTOCOMPACT_BUFFER" ]] && ! [[ "$AUTOCOMPACT_BUFFER" =~ ^[0-9]+$ ]]; then
     AUTOCOMPACT_BUFFER=""
+fi
+# Validate SMART_CONTEXT_LIMIT is numeric; fall back to the default if not
+if ! [[ "$SMART_CONTEXT_LIMIT" =~ ^[0-9]+$ ]]; then
+    SMART_CONTEXT_LIMIT=200000
 fi
 
 # ── Global state bus ─────────────────────────────────────────────────────────
@@ -107,23 +116,48 @@ sl_calc_format_tokens() {
 }
 
 # ── Helper: calc_context_icon ────────────────────────────────────────────────
-# Mirrors bash calc_context_icon.
+# The badge glyph encodes the recall zone, not raw fill:
+#   smart zone (used ≤ SMART_CONTEXT_LIMIT) → diamond, 2 states: ◇ → ◆
+#   dumb  zone (used  > SMART_CONTEXT_LIMIT) → moon,    5 states: ○ ◔ ◑ ◕ ●
+#   overflow   (past the usable limit)        → ⊙
+# The family flip from ◆ to ○ marks crossing out of precise-recall territory.
+# The sharp diamond gets two states for the small smart zone; the moon gets
+# five to track the much larger dumb zone from the threshold up to the limit.
 sl_calc_context_icon() {
     local key=$1
-    local pct=$2
-    local remaining=$3
+    local current=$2
+    local usable_limit=$3
+    local remaining=$4
+    local limit="${SMART_CONTEXT_LIMIT:-200000}"
+
     if (( remaining < 0 )); then
         SL[$key]="⊙"
-    elif (( pct < 20 )); then
-        SL[$key]="○"
-    elif (( pct < 40 )); then
-        SL[$key]="◔"
-    elif (( pct < 60 )); then
-        SL[$key]="◑"
-    elif (( pct < 80 )); then
-        SL[$key]="◕"
+    elif (( current <= limit )); then
+        # Smart zone: empty diamond first half, filled diamond approaching the line
+        if (( current * 2 < limit )); then
+            SL[$key]="◇"
+        else
+            SL[$key]="◆"
+        fi
     else
-        SL[$key]="●"
+        # Dumb zone: moon phases mapped across threshold → usable limit
+        local span=$(( usable_limit - limit ))
+        if (( span <= 0 )); then
+            SL[$key]="●"
+        else
+            local dpct=$(( (current - limit) * 100 / span ))
+            if (( dpct < 20 )); then
+                SL[$key]="○"
+            elif (( dpct < 40 )); then
+                SL[$key]="◔"
+            elif (( dpct < 60 )); then
+                SL[$key]="◑"
+            elif (( dpct < 80 )); then
+                SL[$key]="◕"
+            else
+                SL[$key]="●"
+            fi
+        fi
     fi
 }
 
@@ -421,7 +455,7 @@ sl_build_context() {
     SL[context.visible]=true
 
     sl_calc_format_tokens "context.remaining_formatted" "$remaining"
-    sl_calc_context_icon "context.icon" "$pct" "$remaining"
+    sl_calc_context_icon "context.icon" "$current" "$usable_limit" "$remaining"
 
     local segments=10
     if (( remaining < 0 )); then
