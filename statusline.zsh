@@ -34,7 +34,7 @@ typeset -g _sl_irp_r=0 _sl_irp_g=0 _sl_irp_b=0   # interpolate_rgb output
 typeset -g _sl_styled=""                             # style_segment output
 typeset -g _sl_ratio=0                               # piecewise_overflow_ratio output
 
-# 4-stop segment palette (used by _sl_style_segment for git_seg/tool_seg/task_seg
+# 4-stop segment palette (used by _sl_style_segment for git_seg/tool_seg
 # cycling). These are DIFFERENT from the per-bar gradient constants in sl_layout
 # (SL[rate7d.grad_*] etc.) which are fill-color endpoints for individual bars.
 typeset -ga _sl_pal_r=(34  96  168 217)
@@ -209,12 +209,12 @@ sl_input_transcript() {
 }
 
 # ── Stage 1d: sl_input_transcript_events ─────────────────────────────────────
-# Parse tool_use/tool_result events from transcript + track task groups.
-# Mirrors bash: fetch_transcript → parse_tool_events + aggregate_tools + track_tasks.
-# Split into three helpers; see below. The shared parallel arrays
+# Parse tool_use/tool_result events from transcript and aggregate tool counts.
+# Mirrors bash: fetch_transcript → parse_tool_events + aggregate_tools.
+# Split into two helpers; see below. The shared parallel arrays
 # (_sl_tool_order, _sl_tool_names, _sl_tool_targets, _sl_tool_results,
 # _sl_tool_is_agent) are declared typeset -g[aA] in the parse helper so they
-# cross into the aggregation and task-group passes.
+# cross into the aggregation pass.
 
 # Run the jq extract and deserialize events into shared parallel arrays.
 # Returns 1 if the transcript is missing or yields no events (caller should
@@ -222,7 +222,7 @@ sl_input_transcript() {
 _sl_parse_transcript_events() {
     # Always initialise the shared parallel arrays so the downstream stages
     # can safely iterate even when the transcript is missing, unreadable, or
-    # partially parsed. This is what prevents the TOOLS and TASKS rows from
+    # partially parsed. This is what prevents the TOOLS row from
     # disappearing during long-running MCP tool calls — a transient jq
     # failure no longer wipes the rest of the pipeline.
     typeset -gA _sl_tool_results=()
@@ -249,14 +249,10 @@ _sl_parse_transcript_events() {
               .name as $name |
               .id as $id |
               (
-                  if $name == "TaskUpdate" then
-                      [(.input.taskId // ""), (.input.status // "")] | join(":")
-                  elif $name == "TaskCreate" then
-                      .input.subject // ""
-                  elif .input.file_path then .input.file_path | split("/") | last
-                  elif .input.command then (.input.command | split("\n") | first | .[0:40])
+                  if .input.file_path then .input.file_path | split("/") | last
+                  elif .input.command then (.input.command | split("\n") | first)
                   elif .input.pattern then .input.pattern
-                  elif .input.prompt then (.input.prompt | .[0:30])
+                  elif .input.prompt then (.input.prompt | split("\n") | first)
                   else ""
                   end
               ) as $target |
@@ -295,7 +291,7 @@ _sl_aggregate_tool_states() {
         if [[ -z "${_sl_tool_results[$_id]+x}" ]]; then
             # No result yet — running
             if [[ -n "${_sl_tool_is_agent[$_id]+x}" ]]; then
-                _running_agents="${_running_agents}${_target:0:30}|"
+                _running_agents="${_running_agents}${_target}|"
             else
                 _running_tool_name="$_name"
                 _running_tool_target="$_target"
@@ -335,87 +331,14 @@ _sl_aggregate_tool_states() {
     SL[_raw.tools.running_agents]="$_running_agents"
 }
 
-# Replay Task* events to reconstruct the current task group state and fill
-# SL[_raw.tasks.*]. Consumes the same parallel arrays populated above.
-_sl_build_task_group_state() {
-    # Task group state — declare ALL loop-internal locals here to avoid zsh
-    # printing previous values when re-declaring inside a loop body.
-    local _tg_total=0 _tg_total_all=0 _tg_completed_all=0 _tg_group_offset=0
-    local _ename="" _edata="" _all_terminal="" _gi=0 _gstatus=""
-    local _update_id="" _update_status="" _adjusted_id=0 _prev=""
-    local _id
-    typeset -A _tg_status=()
-    typeset -a _tg_names=()
-
-    # Process events in order (replay_task_events)
-    for _id in "${_sl_tool_order[@]}"; do
-        _ename="${_sl_tool_names[$_id]}"
-        _edata="${_sl_tool_targets[$_id]}"
-
-        if [[ "$_ename" == "TaskCreate" ]]; then
-            # assign_to_group "create": check if current group is terminal
-            if (( _tg_total > 0 )); then
-                _all_terminal=true
-                for (( _gi=1; _gi<=_tg_total; _gi++ )); do
-                    _gstatus="${_tg_status[$_gi]:-pending}"
-                    if [[ "$_gstatus" != "completed" && "$_gstatus" != "deleted" ]]; then
-                        _all_terminal=false
-                        break
-                    fi
-                done
-                if [[ "$_all_terminal" == "true" ]]; then
-                    (( _tg_group_offset += _tg_total ))
-                    _tg_total=0
-                    _tg_status=()
-                    _tg_names=()
-                fi
-            fi
-            (( _tg_total++ ))
-            (( _tg_total_all++ ))
-            [[ -n "$_edata" ]] && _tg_names+=("$_edata")
-            _tg_status[$_tg_total]="pending"
-
-        elif [[ "$_ename" == "TaskUpdate" ]]; then
-            # assign_to_group "update"
-            _update_id="${_edata%%:*}"
-            _update_status="${_edata#*:}"
-            if [[ -n "$_update_id" && -n "$_update_status" ]]; then
-                _adjusted_id=$(( _update_id - _tg_group_offset ))
-                if (( _adjusted_id >= 1 && _adjusted_id <= _tg_total )); then
-                    _prev="${_tg_status[$_adjusted_id]:-pending}"
-                    _tg_status[$_adjusted_id]="$_update_status"
-                    if [[ "$_update_status" == "completed" && "$_prev" != "completed" ]]; then
-                        (( _tg_completed_all++ ))
-                    fi
-                fi
-            fi
-        fi
-    done
-
-    SL[_raw.tasks.group_total]="$_tg_total"
-    SL[_raw.tasks.total_all]="$_tg_total_all"
-    SL[_raw.tasks.completed_all]="$_tg_completed_all"
-
-    local _i=0 _names_str="" _n=""
-    for (( _i=1; _i<=_tg_total; _i++ )); do
-        SL[_raw.tasks.status_${_i}]="${_tg_status[$_i]:-pending}"
-    done
-    for _n in "${_tg_names[@]}"; do
-        _names_str="${_names_str}${_n}|"
-    done
-    SL[_raw.tasks.names]="$_names_str"
-}
-
 sl_input_transcript_events() {
-    # Always run every stage. _sl_parse_transcript_events guarantees the
+    # Always run both stages. _sl_parse_transcript_events guarantees the
     # shared parallel arrays are initialised even when the transcript
-    # cannot be parsed, so aggregation and task-group replay degrade to
-    # "no tools, no tasks" instead of wiping the whole SL[_raw.tools.*]
-    # and SL[_raw.tasks.*] namespaces out from under sl_build_tools /
-    # sl_build_tasks.
+    # cannot be parsed, so aggregation degrades to "no tools" instead of
+    # wiping the whole SL[_raw.tools.*] namespace out from under
+    # sl_build_tools.
     _sl_parse_transcript_events
     _sl_aggregate_tool_states
-    _sl_build_task_group_state
 }
 
 # ── Stage 2: sl_build ────────────────────────────────────────────────────────
@@ -732,86 +655,6 @@ sl_build_tools() {
     SL[tools.running_target]="${SL[_raw.tools.running_target]}"
 }
 
-# ── Build: tasks row ──────────────────────────────────────────────────────────
-# Mirrors bash process_tasks_and_agents + count_by_status + find_* helpers.
-sl_build_tasks() {
-    local _nl=$'\n'
-    local _group_total="${SL[_raw.tasks.group_total]:-0}"
-    local _agent_count=0
-
-    # Count running agents (mirrors process_tasks_and_agents agent_count logic)
-    local _agents="${SL[_raw.tools.running_agents]:-}"
-    if [[ -n "$_agents" ]]; then
-        local _adesc
-        while IFS='|' read -r _adesc; do
-            [[ -z "$_adesc" ]] && continue
-            (( _agent_count++ ))
-        done <<< "${_agents//|/${_nl}}"
-    fi
-
-    (( _group_total > 0 || _agent_count > 0 )) || return 0
-    SL[tasks.visible]=true
-    SL[tasks.total_all]="${SL[_raw.tasks.total_all]:-0}"
-    SL[tasks.completed_all]="${SL[_raw.tasks.completed_all]:-0}"
-    SL[tasks.running_agents]="$_agents"
-    SL[tasks.agent_count]="$_agent_count"
-
-    # count_by_status for active group — declare all loop-internal locals upfront
-    local _completed=0 _in_progress=0 _pending=0
-    local _i=0 _st="" _ni=0 _nval=""
-    for (( _i=1; _i<=_group_total; _i++ )); do
-        _st="${SL[_raw.tasks.status_${_i}]:-pending}"
-        case "$_st" in
-            completed)   (( _completed++ )) ;;
-            in_progress) (( _in_progress++ )) ;;
-            deleted)     ;;
-            *)           (( _pending++ )) ;;
-        esac
-    done
-    SL[tasks.completed]="$_completed"
-    SL[tasks.in_progress]="$_in_progress"
-    SL[tasks.pending]="$_pending"
-
-    # find_last_completed: last completed task's name
-    local _names="${SL[_raw.tasks.names]:-}"
-    local -a _name_arr=()
-    local _n=""
-    while IFS='|' read -r _n; do
-        _name_arr+=("$_n")
-    done <<< "${_names//|/${_nl}}"
-
-    local _last_completed="" _in_progress_name="" _first_pending=""
-    for (( _i=1; _i<=_group_total; _i++ )); do
-        _st="${SL[_raw.tasks.status_${_i}]:-pending}"
-        _nval="${_name_arr[$_i]:-}"   # zsh arrays are 1-based; task _i → index _i
-        if [[ "$_st" == "completed" && -n "$_nval" ]]; then
-            _last_completed="$_nval"
-        fi
-    done
-    # find_in_progress: first in_progress
-    for (( _i=1; _i<=_group_total; _i++ )); do
-        _st="${SL[_raw.tasks.status_${_i}]:-pending}"
-        _nval="${_name_arr[$_i]:-}"
-        if [[ "$_st" == "in_progress" && -n "$_nval" ]]; then
-            _in_progress_name="$_nval"
-            break
-        fi
-    done
-    # find_first_pending: first non-completed non-deleted non-in_progress
-    for (( _i=1; _i<=_group_total; _i++ )); do
-        _st="${SL[_raw.tasks.status_${_i}]:-pending}"
-        _nval="${_name_arr[$_i]:-}"
-        if [[ "$_st" != "completed" && "$_st" != "deleted" && "$_st" != "in_progress" && -n "$_nval" ]]; then
-            _first_pending="$_nval"
-            break
-        fi
-    done
-
-    SL[tasks.last_completed_name]="$_last_completed"
-    SL[tasks.in_progress_name]="$_in_progress_name"
-    SL[tasks.first_pending_name]="$_first_pending"
-}
-
 # ── Segment list ─────────────────────────────────────────────────────────────
 typeset -ga SL_SEGMENTS=(model rate7d rate5h context agent_tokens cost)
 typeset -ga SL_REPO_SEGMENTS=(project branch worktree pr_number pr_state pr_review pr_comments git_sync pr_mergeable pr_checks git_dirty)
@@ -826,7 +669,7 @@ typeset -ga SL_REPO_SEGMENTS=(project branch worktree pr_number pr_state pr_revi
 #     sl_layout_responsive under budget pressure (currently `meta`).
 #   - Indexes 2..N are removable in reverse-index order when the 6-line
 #     budget is exceeded (last element → first to go).
-typeset -ga SL_LAYOUT_ORDER=(meta repo tools tasks)
+typeset -ga SL_LAYOUT_ORDER=(meta repo tools)
 
 sl_run_build() {
     sl_input_transcript
@@ -841,7 +684,6 @@ sl_run_build() {
         sl_build_repo_${seg}
     done
     sl_build_tools
-    sl_build_tasks
 }
 
 # ── Stage 2b: repo segment builders ──────────────────────────────────────────
@@ -995,10 +837,10 @@ sl_build_repo_git_dirty() {
 
 # ── Stage 3: sl_layout ───────────────────────────────────────────────────────
 # Parallel arrays per row: texts, roles, metas, links.
-# Row suffixes: META, REPO, TOOLS, TASKS.
+# Row suffixes: META, REPO, TOOLS.
 # _SL_{ROW}_TEXTS  — text content
 # _SL_{ROW}_ROLES  — styling role
-# _SL_{ROW}_METAS  — meta reference (proc name for bars, index for git/tool/task)
+# _SL_{ROW}_METAS  — meta reference (proc name for bars, index for git/tool)
 # _SL_{ROW}_LINKS  — OSC 8 URL (empty if none)
 
 # Helper: push one entry to a row's parallel arrays.
@@ -1059,7 +901,6 @@ _sl_layout_init() {
     typeset -ga _SL_META_TEXTS=()  _SL_META_ROLES=()  _SL_META_METAS=()  _SL_META_LINKS=()
     typeset -ga _SL_REPO_TEXTS=()  _SL_REPO_ROLES=()  _SL_REPO_METAS=()  _SL_REPO_LINKS=()
     typeset -ga _SL_TOOLS_TEXTS=() _SL_TOOLS_ROLES=() _SL_TOOLS_METAS=() _SL_TOOLS_LINKS=()
-    typeset -ga _SL_TASKS_TEXTS=() _SL_TASKS_ROLES=() _SL_TASKS_METAS=() _SL_TASKS_LINKS=()
 
     # Reset shrink state so layout is idempotent across calls.
     # META uses a flat step counter into _SL_META_SHRINK_SEQUENCE; the other
@@ -1067,7 +908,6 @@ _sl_layout_init() {
     SL[_shrink.meta.step]=0
     SL[_shrink.repo.phase]=0; SL[_shrink.repo.sub]=0
     SL[_shrink.tools.phase]=0; SL[_shrink.tools.sub]=0
-    SL[_shrink.tasks.phase]=0; SL[_shrink.tasks.sub]=0
 
     # Propagate bar proc data needed by color functions
     # rate7d
@@ -1202,76 +1042,6 @@ _sl_layout_tools() {
         fi
         SL[_layout.tools.chip_end]=${#_SL_TOOLS_TEXTS[@]}
         (( _ti++ ))
-    fi
-}
-
-# Row 4: TASKS — counts + completed/in-progress/pending/agent segments.
-_sl_layout_tasks() {
-    local _nl=$'\n'
-    SL[_layout.tasks.completed_name_idx]=""
-    SL[_layout.tasks.in_progress_idx]=""
-    SL[_layout.tasks.pending_idx]=""
-    SL[_layout.tasks.agents_start]=""
-    SL[_layout.tasks.agents_end]=""
-    SL[_layout.tasks.glyphs_idx]=""
-    [[ "${SL[tasks.visible]:-}" == "true" ]] || return 0
-
-    local _display_total=$(( ${SL[tasks.total_all]:-0} + ${SL[tasks.agent_count]:-0} ))
-    local _display_completed="${SL[tasks.completed_all]:-0}"
-    local _tsi=0
-
-    if (( _display_total > 0 )); then
-        _sl_push_seg TASKS "${_display_completed}/${_display_total}" "task_seg" "$_tsi" ""
-        (( _tsi++ ))
-    fi
-
-    local _completed="${SL[tasks.completed]:-0}"
-    if (( _completed > 0 )); then
-        local _icons="" _ci
-        for (( _ci=0; _ci<_completed; _ci++ )); do _icons="${_icons}✓"; done
-        local _comp_label="$_icons"
-        [[ -n "${SL[tasks.last_completed_name]}" ]] && _comp_label="${_icons} ${SL[tasks.last_completed_name]}"
-        _sl_push_seg TASKS " ${_comp_label} " "task_seg" "$_tsi" ""
-        SL[_layout.tasks.glyphs_idx]=${#_SL_TASKS_TEXTS[@]}
-        # completed_name_idx: only meaningful if there's actually a name
-        [[ -n "${SL[tasks.last_completed_name]}" ]] && SL[_layout.tasks.completed_name_idx]=${#_SL_TASKS_TEXTS[@]}
-        (( _tsi++ ))
-    fi
-
-    local _in_progress="${SL[tasks.in_progress]:-0}"
-    if (( _in_progress > 0 )); then
-        local _prog_label="◐"
-        [[ -n "${SL[tasks.in_progress_name]}" ]] && _prog_label="◐ ${SL[tasks.in_progress_name]}"
-        _sl_push_seg TASKS " ${_prog_label} " "task_seg" "$_tsi" ""
-        SL[_layout.tasks.in_progress_idx]=${#_SL_TASKS_TEXTS[@]}
-        (( _tsi++ ))
-    fi
-
-    local _pending="${SL[tasks.pending]:-0}"
-    if (( _pending > 0 )); then
-        local _picons="" _pi
-        for (( _pi=0; _pi<_pending; _pi++ )); do _picons="${_picons}○"; done
-        local _pend_label="$_picons"
-        [[ -n "${SL[tasks.first_pending_name]}" ]] && _pend_label="${_picons} ${SL[tasks.first_pending_name]}"
-        _sl_push_seg TASKS " ${_pend_label} " "task_seg" "$_tsi" ""
-        SL[_layout.tasks.pending_idx]=${#_SL_TASKS_TEXTS[@]}
-        (( _tsi++ ))
-    fi
-
-    local _agents="${SL[tasks.running_agents]:-}"
-    if [[ -n "$_agents" ]]; then
-        local _agents_started=false
-        local _adesc
-        while IFS='|' read -r _adesc; do
-            [[ -z "$_adesc" ]] && continue
-            _sl_push_seg TASKS " ◐ ${_adesc}" "task_seg" "$_tsi" ""
-            if [[ "$_agents_started" == "false" ]]; then
-                SL[_layout.tasks.agents_start]=${#_SL_TASKS_TEXTS[@]}
-                _agents_started=true
-            fi
-            SL[_layout.tasks.agents_end]=${#_SL_TASKS_TEXTS[@]}
-            (( _tsi++ ))
-        done <<< "${_agents//|/${_nl}}"
     fi
 }
 
@@ -1533,14 +1303,6 @@ _sl_style_segment() {
                 "${_sl_pal_r[$_fi]}" "${_sl_pal_g[$_fi]}" "${_sl_pal_b[$_fi]}" \
                 "${_sl_pal_r[$_tii]}" "${_sl_pal_g[$_tii]}" "${_sl_pal_b[$_tii]}" \
                 20 22 32 ;;
-        task_seg)
-            # Tasks row: cycle starting at stop 3 (orange); meta is _tsi index.
-            local _tsi="${meta:-0}"
-            local _fi=$(( ((_tsi + 3) % 4) + 1 ))
-            local _tii=$(( ((_tsi + 4) % 4) + 1 ))
-            _sl_apply_fg _sl_styled "$text" \
-                "${_sl_pal_r[$_fi]}" "${_sl_pal_g[$_fi]}" "${_sl_pal_b[$_fi]}" \
-                "${_sl_pal_r[$_tii]}" "${_sl_pal_g[$_tii]}" "${_sl_pal_b[$_tii]}" ;;
         warning_title)
             _sl_apply_fg _sl_styled "$text" 251 191 36 251 191 36 ;;
         warning_body)
@@ -2251,142 +2013,6 @@ _sl_shrink_tools() {
     return 1
 }
 
-# ─── Tasks row shrink ─────────────────────────────────────────────────────────
-# Phases:
-#  0: truncate completed task name right-to-left, min 1 char
-#  1: truncate agent descriptions leftmost first, min 1 char
-#  2: truncate in-progress task name right-to-left
-#  3: truncate pending task name right-to-left
-#  4: collapse N checkmarks to single "✓"
-_sl_shrink_tasks() {
-    local phase="${SL[_shrink.tasks.phase]:-0}"
-    local sub="${SL[_shrink.tasks.sub]:-0}"
-
-    # Phase 0: truncate completed name
-    if (( phase == 0 )); then
-        local cidx="${SL[_layout.tasks.completed_name_idx]:-}"
-        if [[ -n "$cidx" ]]; then
-            local cur="${_SL_TASKS_TEXTS[$cidx]}"
-            # Text is " ✓✓ Name " — find the part after the checkmarks
-            # Strip leading " ", trailing " ", find " " after glyphs
-            local trimmed="${cur# }"
-            trimmed="${trimmed% }"
-            # Find position of first space after glyphs (✓ chars)
-            local glyph_end=0
-            while [[ "${trimmed[$((glyph_end+1))]}" == "✓" ]]; do
-                (( glyph_end++ ))
-            done
-            local prefix="${trimmed[1,$glyph_end]}"  # the ✓ part
-            local name_part="${trimmed[$((glyph_end+2)),-1]}"  # skip space after glyphs
-            local namelen=${#name_part}
-            if (( namelen > 1 )); then
-                sl_truncate_right "$name_part" $(( namelen - 1 ))
-                _SL_TASKS_TEXTS[$cidx]=" ${prefix} ${_sl_trunc_out} "
-                return 0
-            fi
-        fi
-        SL[_shrink.tasks.phase]=1; SL[_shrink.tasks.sub]=0
-        phase=1; sub=0
-    fi
-
-    # Phase 1: truncate agent descriptions, leftmost first
-    if (( phase == 1 )); then
-        local as="${SL[_layout.tasks.agents_start]:-}" ae="${SL[_layout.tasks.agents_end]:-}"
-        if [[ -n "$as" && -n "$ae" && "$as" -le "$ae" ]]; then
-            local i=""
-            for (( i=as; i<=ae; i++ )); do
-                local txt="${_SL_TASKS_TEXTS[$i]}"
-                # Text is " ◐ desc" — prefix is " ◐ "
-                if [[ "$txt" == " ◐ "* ]]; then
-                    local desc="${txt#" ◐ "}"
-                    local desclen=${#desc}
-                    if (( desclen > 1 )); then
-                        sl_truncate_right "$desc" $(( desclen - 1 ))
-                        _SL_TASKS_TEXTS[$i]=" ◐ ${_sl_trunc_out}"
-                        SL[_shrink.tasks.sub]=$(( i - as ))
-                        return 0
-                    fi
-                fi
-            done
-        fi
-        SL[_shrink.tasks.phase]=2; SL[_shrink.tasks.sub]=0
-        phase=2; sub=0
-    fi
-
-    # Phase 2: truncate in-progress task name
-    if (( phase == 2 )); then
-        local iidx="${SL[_layout.tasks.in_progress_idx]:-}"
-        if [[ -n "$iidx" ]]; then
-            local cur="${_SL_TASKS_TEXTS[$iidx]}"
-            # Text is " ◐ Name " or " ◐ "
-            if [[ "$cur" == " ◐ "* ]]; then
-                local suffix="${cur#" ◐ "}"
-                suffix="${suffix% }"
-                local slen=${#suffix}
-                if (( slen > 1 )); then
-                    sl_truncate_right "$suffix" $(( slen - 1 ))
-                    _SL_TASKS_TEXTS[$iidx]=" ◐ ${_sl_trunc_out} "
-                    return 0
-                fi
-            fi
-        fi
-        SL[_shrink.tasks.phase]=3; SL[_shrink.tasks.sub]=0
-        phase=3; sub=0
-    fi
-
-    # Phase 3: truncate pending task name
-    if (( phase == 3 )); then
-        local pidx="${SL[_layout.tasks.pending_idx]:-}"
-        if [[ -n "$pidx" ]]; then
-            local cur="${_SL_TASKS_TEXTS[$pidx]}"
-            # Text is " ○○ Name " or " ○ "
-            local trimmed="${cur# }"
-            trimmed="${trimmed% }"
-            # find glyph prefix (○ chars)
-            local glyph_end=0
-            while [[ "${trimmed[$((glyph_end+1))]}" == "○" ]]; do
-                (( glyph_end++ ))
-            done
-            local gprefix="${trimmed[1,$glyph_end]}"
-            local name_part=""
-            if (( glyph_end < ${#trimmed} )); then
-                name_part="${trimmed[$((glyph_end+2)),-1]}"
-            fi
-            local namelen=${#name_part}
-            if (( namelen > 1 )); then
-                sl_truncate_right "$name_part" $(( namelen - 1 ))
-                _SL_TASKS_TEXTS[$pidx]=" ${gprefix} ${_sl_trunc_out} "
-                return 0
-            fi
-        fi
-        SL[_shrink.tasks.phase]=4; SL[_shrink.tasks.sub]=0
-        phase=4; sub=0
-    fi
-
-    # Phase 4: collapse N checkmarks to single "✓"
-    if (( phase == 4 )); then
-        local gidx="${SL[_layout.tasks.glyphs_idx]:-}"
-        if [[ -n "$gidx" ]]; then
-            local cur="${_SL_TASKS_TEXTS[$gidx]}"
-            local trimmed="${cur# }"
-            trimmed="${trimmed% }"
-            # Count leading ✓ glyphs
-            local nc=0
-            while [[ "${trimmed[$((nc+1))]}" == "✓" ]]; do (( nc++ )); done
-            if (( nc > 1 )); then
-                local rest="${trimmed[$((nc+1)),-1]}"
-                _SL_TASKS_TEXTS[$gidx]=" ✓${rest} "
-                SL[_shrink.tasks.phase]=5
-                return 0
-            fi
-        fi
-        SL[_shrink.tasks.phase]=5
-        phase=5
-    fi
-
-    return 1
-}
-
 # Zero out all parallel arrays for a given row.
 _sl_remove_row() {
     local row=$1
@@ -2438,7 +2064,7 @@ _sl_try_wrap() {
 #   1. Shrink all rows to fit in 1 line (widest-first).
 #   2. If a row can't shrink to 1 line but CAN wrap to 2: wrap it.
 #   3. Enforce 6-line budget: un-wrap or remove lowest-priority rows.
-#   Priority: META > REPO > TOOLS > TASKS. META never removed.
+#   Priority: META > REPO > TOOLS. META never removed.
 sl_layout_responsive() {
     local term_cols="${SL[_raw.tty_cols]:-9999}"
     local -A _step_counters=()
@@ -2548,7 +2174,7 @@ sl_layout_responsive() {
         {
             local _diag_r
             printf 'cols=%s ' "$term_cols"
-            for _diag_r in META REPO TOOLS TASKS; do
+            for _diag_r in META REPO TOOLS; do
                 sl_measure_row "$_diag_r"
                 printf '%s=%d ' "$_diag_r" "$_sl_row_width"
             done

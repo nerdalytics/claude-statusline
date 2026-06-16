@@ -1,10 +1,10 @@
 # claude-statusline
 
 A single-file zsh statusline for [Claude Code](https://claude.com/claude-code).
-It renders up to four rows of live session state and fits them into
+It renders up to three rows of live session state and fits them into
 whatever terminal width Claude Code hands it.
 
-![Full statusline at a wide terminal: META row with model name, 7-day and 5-hour rate bars, context bar, and cost; REPO row with branch and dirty-file indicators; TOOLS row with per-tool chips; TASKS row with the in-progress task.](./assets/layout-full.png)
+![Full statusline at a wide terminal: META row with model name, 7-day and 5-hour rate bars, context bar, and cost; REPO row with branch and dirty-file indicators; TOOLS row with per-tool chips.](./assets/layout-full.png)
 
 ## Install
 
@@ -268,14 +268,13 @@ STATUSLINE_DEBUG=1 echo '{"model":{"display_name":"Test"}}' | zsh ~/.claude/stat
 
 ## What you see on screen
 
-Up to four rows. Each row appears only when it has content.
+Up to three rows. Each row appears only when it has content.
 
 | Row   | Content                                                                                                                           |
 |-------|-----------------------------------------------------------------------------------------------------------------------------------|
 | META  | Model name, 7-day rate bar, 5-hour rate bar, context-window bar, agent tokens, session cost                                       |
 | REPO  | Project directory, branch, worktree, PR number and state and review, comments, sync with remote, mergeability, CI checks, dirty files |
 | TOOLS | Total tool-call count, per-tool chips with counts, currently running tool                                                          |
-| TASKS | Completed/total counter, last-completed name, in-progress task, first pending task, running sub-agents                            |
 
 ### META row
 
@@ -330,18 +329,6 @@ Appears when at least one tool has been used this session.
 | **Completed chips** | One chip per distinct tool, sorted by count ascending. `name N` when count > 1, just `name` otherwise.               | `Read 39` `Edit 33`  |
 | **Running tool**    | Currently-executing tool, prefixed `◐`. Shows target (file path, command, pattern, prompt) when available.           | `◐ Bash: git status` |
 
-### TASKS row
-
-Appears when there are active tasks or running sub-agents.
-
-| Part                | Shows                                                                                                  | Example                  |
-|---------------------|--------------------------------------------------------------------------------------------------------|--------------------------|
-| **Counter**         | Completed / total. Total includes running sub-agents.                                                   | `10/10`                  |
-| **Completed glyphs**| One `✓` per completed task in the current group, followed by the last-completed task's name.            | `✓✓ Verify both batches` |
-| **In progress**     | Prefixed `◐` followed by the task name.                                                                 | `◐ Write tests`          |
-| **Pending**         | One `○` per pending task, followed by the first pending task's name.                                    | `○○ Deploy to staging`   |
-| **Running agents**  | One entry per running sub-agent, each prefixed `◐`. Shows the agent's description, truncated to 30 characters. | `◐ Reviewing PR`         |
-
 ### Icon glossary
 
 | Icon  | Meaning                                     | Where                                            |
@@ -350,9 +337,9 @@ Appears when there are active tasks or running sub-agents.
 | `⎇`   | Git branch or worktree                      | REPO                                             |
 | `⚡`   | Agent token usage                            | META                                             |
 | `$`   | Session cost                                | META                                             |
-| `◐`   | In progress                                 | TOOLS, TASKS                                     |
-| `○`   | Pending                                     | TASKS; also context bar badge at low usage       |
-| `✓`   | Completed / CI pass / review approved       | TASKS, REPO                                      |
+| `◐`   | In progress / currently running             | TOOLS                                            |
+| `○`   | Pending                                     | Context bar badge at low usage                   |
+| `✓`   | Completed / CI pass / review approved       | REPO                                             |
 | `✗`   | CI fail / review requested changes          | REPO                                             |
 | `⋯`   | Review required                             | REPO                                             |
 | `✎`   | Draft PR                                    | REPO                                             |
@@ -436,16 +423,16 @@ is removed to make room.
 
 ### Row priority
 
-`SL_LAYOUT_ORDER=(meta repo tools tasks)` defines both the display order
+`SL_LAYOUT_ORDER=(meta repo tools)` defines both the display order
 and the shrink priority. Index 1 (META) is protected and never removed.
-When the budget demands it, the rest are removed in reverse order: TASKS
-first, then TOOLS, then REPO.
+When the budget demands it, the rest are removed in reverse order: TOOLS
+first, then REPO.
 
 To customise, override `SL_LAYOUT_ORDER` before `sl_layout` runs. Example,
 swapping the TOOLS and REPO rows:
 
 ```zsh
-SL_LAYOUT_ORDER=(meta tools repo tasks)
+SL_LAYOUT_ORDER=(meta tools repo)
 ```
 
 ### META row: 17 shrink steps
@@ -533,29 +520,11 @@ roles between `chip_start` and `chip_end`.
 
 </details>
 
-### TASKS row: 5 shrink phases
-
-Truncates the completed/in-progress/pending task names one character at
-a time, then collapses checkmark runs down to a single `✓`.
-
-<details>
-<summary>Show the full phase table</summary>
-
-| Phase | Action                                                                                                         |
-|-------|----------------------------------------------------------------------------------------------------------------|
-|  0    | Truncate the last-completed task name, right to left. Checkmark prefix is preserved.                            |
-|  1    | Truncate running-agent descriptions, leftmost agent first.                                                     |
-|  2    | Truncate the in-progress task name, right to left. The `◐` prefix is preserved.                                 |
-|  3    | Truncate the first-pending task name, right to left. The `○`-glyph prefix is preserved.                         |
-|  4    | Collapse a row of `✓✓✓` checkmarks to a single `✓`.                                                             |
-
-</details>
-
 ### When nothing else fits
 
 When META still exceeds the available width after all 17 shrink steps
-have run and the model name is gone, the orchestrator drops REPO, TOOLS,
-and TASKS immediately. META renders on whatever content survived, usually
+have run and the model name is gone, the orchestrator drops REPO and
+TOOLS immediately. META renders on whatever content survived, usually
 just a badge or two.
 
 Under extreme width pressure the script compacts the bars and strips
