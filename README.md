@@ -1,10 +1,10 @@
 # claude-statusline
 
 A single-file zsh statusline for [Claude Code](https://claude.com/claude-code).
-It renders up to four rows of live session state and fits them into
+It renders up to three rows of live session state and fits them into
 whatever terminal width Claude Code hands it.
 
-![Full statusline at a wide terminal: META row with model name, 7-day and 5-hour rate bars, context bar, and cost; REPO row with branch and dirty-file indicators; TOOLS row with per-tool chips; TASKS row with the in-progress task.](./assets/layout-full.png)
+![Full statusline at a wide terminal: META row with model name, 7-day and 5-hour rate bars, context bar, and cost; REPO row with branch and dirty-file indicators; TOOLS row with per-tool chips.](./assets/layout-full.png)
 
 ## Install
 
@@ -246,6 +246,23 @@ install uses a different reserve:
 AUTOCOMPACT_BUFFER=33000
 ```
 
+### `SMART_CONTEXT_LIMIT` (integer)
+
+Set in `~/.claude/statusline.conf`. The token boundary between the **smart
+zone** (precise recall) and the much larger **dumb zone** (vague recall). The
+context-bar badge shows a sharp diamond (`◇ ◆`) while used tokens stay at or
+below this limit, and flips to a filling moon (`○ ◔ ◑ ◕ ●`) once they cross it
+— the cue that it is time to clear the context. It is an absolute token count,
+so the smart zone is a fixed size regardless of the model's context window.
+
+Default is `200000` (200k tokens). There is no published "recall degrades at N
+tokens" figure; treat this as a heuristic and tune it to taste:
+
+```sh
+# ~/.claude/statusline.conf
+SMART_CONTEXT_LIMIT=200000
+```
+
 ### `DEFAULT_BRANCH` (string)
 
 Set in `~/.claude/statusline.conf`. Overrides git default-branch detection.
@@ -268,14 +285,13 @@ STATUSLINE_DEBUG=1 echo '{"model":{"display_name":"Test"}}' | zsh ~/.claude/stat
 
 ## What you see on screen
 
-Up to four rows. Each row appears only when it has content.
+Up to three rows. Each row appears only when it has content.
 
 | Row   | Content                                                                                                                           |
 |-------|-----------------------------------------------------------------------------------------------------------------------------------|
 | META  | Model name, 7-day rate bar, 5-hour rate bar, context-window bar, agent tokens, session cost                                       |
 | REPO  | Project directory, branch, worktree, PR number and state and review, comments, sync with remote, mergeability, CI checks, dirty files |
 | TOOLS | Total tool-call count, per-tool chips with counts, currently running tool                                                          |
-| TASKS | Completed/total counter, last-completed name, in-progress task, first pending task, running sub-agents                            |
 
 ### META row
 
@@ -284,7 +300,7 @@ Up to four rows. Each row appears only when it has content.
 | **model**       | Model display name (`Claude Sonnet 4`, `Opus 4.6 (1M context)`). Rendered as a teal→purple gradient.                         | Always                                                              |
 | **rate7d**      | 7-day rate-limit usage as a 7-cell bar with a `7d` badge. Purple gradient. Suffix shows time-to-reset (`↻ 5d16h`).            | `rate_limits.seven_day` is in the input JSON                        |
 | **rate5h**      | 5-hour rate-limit usage as a 10-cell bar with a `5h` badge. Cyan gradient. Suffix shows time-to-reset (`↻ 4h19m`).            | `rate_limits.five_hour` is in the input JSON                        |
-| **context**     | Context-window usage as a 10-cell bar. Badge is a progress glyph. Suffix is remaining tokens (`↻ 142.5K`). Green→yellow→red. | `context_window.current_usage` is present and window size > 0       |
+| **context**     | Context-window usage as a 10-cell bar. Badge marks the recall zone — smart (`◇ ◆`) vs dumb (`○ ◔ ◑ ◕ ●`), see below. Suffix is remaining tokens (`↻ 142.5K`). Green→yellow→red. | `context_window.current_usage` is present and window size > 0       |
 | **agent_tokens**| Tokens consumed by sub-agents (`⚡12.3K`). Muted gray.                                                                        | At least one sub-agent reported tokens in the transcript            |
 | **cost**        | Session cost in USD (`$1.42`). Muted gray.                                                                                   | `cost.total_cost_usd` is present and non-zero                       |
 
@@ -330,18 +346,6 @@ Appears when at least one tool has been used this session.
 | **Completed chips** | One chip per distinct tool, sorted by count ascending. `name N` when count > 1, just `name` otherwise.               | `Read 39` `Edit 33`  |
 | **Running tool**    | Currently-executing tool, prefixed `◐`. Shows target (file path, command, pattern, prompt) when available.           | `◐ Bash: git status` |
 
-### TASKS row
-
-Appears when there are active tasks or running sub-agents.
-
-| Part                | Shows                                                                                                  | Example                  |
-|---------------------|--------------------------------------------------------------------------------------------------------|--------------------------|
-| **Counter**         | Completed / total. Total includes running sub-agents.                                                   | `10/10`                  |
-| **Completed glyphs**| One `✓` per completed task in the current group, followed by the last-completed task's name.            | `✓✓ Verify both batches` |
-| **In progress**     | Prefixed `◐` followed by the task name.                                                                 | `◐ Write tests`          |
-| **Pending**         | One `○` per pending task, followed by the first pending task's name.                                    | `○○ Deploy to staging`   |
-| **Running agents**  | One entry per running sub-agent, each prefixed `◐`. Shows the agent's description, truncated to 30 characters. | `◐ Reviewing PR`         |
-
 ### Icon glossary
 
 | Icon  | Meaning                                     | Where                                            |
@@ -350,9 +354,11 @@ Appears when there are active tasks or running sub-agents.
 | `⎇`   | Git branch or worktree                      | REPO                                             |
 | `⚡`   | Agent token usage                            | META                                             |
 | `$`   | Session cost                                | META                                             |
-| `◐`   | In progress                                 | TOOLS, TASKS                                     |
-| `○`   | Pending                                     | TASKS; also context bar badge at low usage       |
-| `✓`   | Completed / CI pass / review approved       | TASKS, REPO                                      |
+| `◐`   | In progress / currently running             | TOOLS                                            |
+| `◇ ◆` | Context smart zone (precise recall)         | META context bar                                 |
+| `○ ◔ ◑ ◕ ●` | Context dumb zone (vague recall), filling | META context bar                            |
+| `⊙`   | Context past the usable limit               | META context bar                                 |
+| `✓`   | Completed / CI pass / review approved       | REPO                                             |
 | `✗`   | CI fail / review requested changes          | REPO                                             |
 | `⋯`   | Review required                             | REPO                                             |
 | `✎`   | Draft PR                                    | REPO                                             |
@@ -366,17 +372,22 @@ Appears when there are active tasks or running sub-agents.
 | `█`   | Filled bar cell                             | META bars                                        |
 | `▁`   | Empty bar cell                              | META bars                                        |
 
-**Context bar badge.** The glyph inside the context bar indicates how full
-the window is:
+**Context bar badge.** The glyph marks the *recall zone* the session is in,
+not raw fill. The **smart zone** is precise-recall context (used tokens at or
+below `SMART_CONTEXT_LIMIT`, 200k by default); past it is the much larger
+**dumb zone**, where recall turns vague. A sharp diamond covers the small
+smart zone in two states; a moon covers the larger dumb zone in five. The flip
+from `◆` to `○` is the cue that it is time to clear the context.
 
-| Glyph | Usage                    |
-|-------|--------------------------|
-| `○`   | < 20%                    |
-| `◔`   | 20% – 39%                |
-| `◑`   | 40% – 59%                |
-| `◕`   | 60% – 79%                |
-| `●`   | ≥ 80%                    |
-| `⊙`   | Overflow (remaining < 0) |
+| Glyph | Zone | Used tokens |
+|-------|------|-------------|
+| `◇`   | Smart, first half             | ≤ ½ × `SMART_CONTEXT_LIMIT`             |
+| `◆`   | Smart, approaching the line   | ½ × limit … `SMART_CONTEXT_LIMIT`       |
+| `○ ◔ ◑ ◕ ●` | Dumb, filling toward the usable limit | `SMART_CONTEXT_LIMIT` … usable limit |
+| `⊙`   | Overflow                      | past the usable limit (remaining < 0)   |
+
+On a model whose window is smaller than `SMART_CONTEXT_LIMIT` (e.g. a 200k
+window), the whole window is smart, so the badge never leaves the diamond.
 
 ## How it adapts to narrow terminals
 
@@ -436,16 +447,16 @@ is removed to make room.
 
 ### Row priority
 
-`SL_LAYOUT_ORDER=(meta repo tools tasks)` defines both the display order
+`SL_LAYOUT_ORDER=(meta repo tools)` defines both the display order
 and the shrink priority. Index 1 (META) is protected and never removed.
-When the budget demands it, the rest are removed in reverse order: TASKS
-first, then TOOLS, then REPO.
+When the budget demands it, the rest are removed in reverse order: TOOLS
+first, then REPO.
 
 To customise, override `SL_LAYOUT_ORDER` before `sl_layout` runs. Example,
 swapping the TOOLS and REPO rows:
 
 ```zsh
-SL_LAYOUT_ORDER=(meta tools repo tasks)
+SL_LAYOUT_ORDER=(meta tools repo)
 ```
 
 ### META row: 17 shrink steps
@@ -477,8 +488,8 @@ the model name itself.
 |  5   | Compact the context bar. Clear fill cells; keep badge and suffix.                                                       |
 |  6   | Clear the 7-day badge text entirely.                                                                                    |
 |  7   | Clear the 5-hour badge text entirely.                                                                                   |
-|  8   | Strip the context badge's leading space and change its role to `spacer`. The progress glyph stays visible longer this way. |
-|  9   | Drop the context progress glyph (`◔ ◕ ◑ ○ ● ⊙`).                                                                         |
+|  8   | Strip the context badge's leading space and change its role to `spacer`. The zone glyph stays visible longer this way. |
+|  9   | Drop the context zone glyph (`◇ ◆ ○ ◔ ◑ ◕ ● ⊙`).                                                                         |
 |  10  | Remove the `↻ ` refresh icon from the 7-day bar suffix.                                                                 |
 |  11  | Remove the `↻ ` refresh icon from the 5-hour bar suffix.                                                                |
 |  12  | Remove the `↻ ` refresh icon from the context bar suffix.                                                               |
@@ -533,29 +544,11 @@ roles between `chip_start` and `chip_end`.
 
 </details>
 
-### TASKS row: 5 shrink phases
-
-Truncates the completed/in-progress/pending task names one character at
-a time, then collapses checkmark runs down to a single `✓`.
-
-<details>
-<summary>Show the full phase table</summary>
-
-| Phase | Action                                                                                                         |
-|-------|----------------------------------------------------------------------------------------------------------------|
-|  0    | Truncate the last-completed task name, right to left. Checkmark prefix is preserved.                            |
-|  1    | Truncate running-agent descriptions, leftmost agent first.                                                     |
-|  2    | Truncate the in-progress task name, right to left. The `◐` prefix is preserved.                                 |
-|  3    | Truncate the first-pending task name, right to left. The `○`-glyph prefix is preserved.                         |
-|  4    | Collapse a row of `✓✓✓` checkmarks to a single `✓`.                                                             |
-
-</details>
-
 ### When nothing else fits
 
 When META still exceeds the available width after all 17 shrink steps
-have run and the model name is gone, the orchestrator drops REPO, TOOLS,
-and TASKS immediately. META renders on whatever content survived, usually
+have run and the model name is gone, the orchestrator drops REPO and
+TOOLS immediately. META renders on whatever content survived, usually
 just a badge or two.
 
 Under extreme width pressure the script compacts the bars and strips
