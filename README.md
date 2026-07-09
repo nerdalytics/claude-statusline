@@ -297,7 +297,7 @@ Up to three rows. Each row appears only when it has content.
 
 | Segment         | What it shows                                                                                                               | Visible when                                                        |
 |-----------------|-----------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------|
-| **model**       | Model display name (`Claude Sonnet 4`, `Opus 4.6 (1M context)`). Rendered as a teal→purple gradient.                         | Always                                                              |
+| **model**       | Model display name (`Claude Sonnet 4`, `Opus 4.8 (1M context)`). Rendered as a teal→purple gradient.                         | Always                                                              |
 | **rate7d**      | 7-day rate-limit usage as a 7-cell bar with a `7d` badge. Purple gradient. Suffix shows time-to-reset (`↻ 5d16h`).            | `rate_limits.seven_day` is in the input JSON                        |
 | **rate5h**      | 5-hour rate-limit usage as a 10-cell bar with a `5h` badge. Cyan gradient. Suffix shows time-to-reset (`↻ 4h19m`).            | `rate_limits.five_hour` is in the input JSON                        |
 | **context**     | Context-window usage as a 10-cell bar. Badge marks the recall zone — smart (`◇ ◆`) vs dumb (`○ ◔ ◑ ◕ ●`), see below. Suffix is remaining tokens (`↻ 142.5K`). Green→yellow→red. | `context_window.current_usage` is present and window size > 0       |
@@ -391,11 +391,10 @@ window), the whole window is smart, so the badge never leaves the diamond.
 
 ## How it adapts to narrow terminals
 
-Four full rows want more horizontal space than most terminals have. The
-script runs three sequential passes each time Claude Code triggers a
-render. It wraps rows wider than the terminal, enforces a six-line budget
-across the whole display, then shrinks the widest remaining row one step
-at a time until everything fits.
+Three rows rarely fit a narrow terminal at full width. Each time Claude
+Code triggers a render, the script runs three passes: it wraps rows wider
+than the terminal, holds the display to a six-line ceiling, then shrinks
+the widest remaining row one step at a time until everything fits.
 
 ### Measuring available width
 
@@ -430,11 +429,13 @@ TOOLS wraps at a chip boundary when there are too many chips to fit:
 ![TOOLS row wrapped: first tool chips on line 1, remaining chips and the running tool continuing on line 2.](./assets/layout-tools-wrapped.png)
 
 **Pass 2: six-line budget.** Wrapped rows count as 2 physical lines,
-unwrapped rows as 1. When the total exceeds 6 lines:
+unwrapped rows as 1. With the three default rows the total tops out at six,
+so this pass only does work once you add rows through `SL_LAYOUT_ORDER`.
+When the total exceeds 6 lines it:
 
-1. Un-wrap the lowest-priority rows first (reverse of `SL_LAYOUT_ORDER`,
+1. Un-wraps the lowest-priority rows first (reverse of `SL_LAYOUT_ORDER`,
    skipping the protected first entry).
-2. If the total is still over budget, remove whole rows in reverse
+2. If the total is still over budget, removes whole rows in reverse
    priority until it fits.
 
 **Pass 3: shrink the widest.** A loop of up to 500 iterations finds the
@@ -466,9 +467,9 @@ Step 0 runs first, then the 17 explicit steps execute in order, one per
 call, until the row fits.
 
 **Step 0 (iterative).** Truncates the model name one character at a time,
-right to left, down to a "first-word second-word" minimum. `Opus 4.6 (1M
-context)` shrinks through `Opus 4.6 (1M contex…` → `Opus 4.6 (1M conte…`
-→ … → `Opus 4.6`, then stops.
+right to left, down to a "first-word second-word" minimum. `Opus 4.8 (1M
+context)` shrinks through `Opus 4.8 (1M contex…` → `Opus 4.8 (1M conte…`
+→ … → `Opus 4.8`, then stops.
 
 The 17 steps run in priority order. Compact the rate bars first, then
 strip badge spaces, clear badge text, drop the context glyph, strip
