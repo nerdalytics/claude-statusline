@@ -523,10 +523,21 @@ sl_input_git() {
     fi
 
     # sync: ahead/behind (mirrors fetch_git_sync)
-    local _rev_counts=""
-    if [[ -n "$_upstream" ]]; then
-        _rev_counts=$(git -C "$dir" --no-optional-locks rev-list --left-right --count "HEAD...@{upstream}" 2>/dev/null)
+    # A branch need not live on origin. In a fork workflow you push to your own
+    # fork and open the PR against origin, so resolve the tracking ref across
+    # every remote rather than assuming origin/<branch>.
+    local _rev_counts="" _track_ref="$_upstream"
+    if [[ -z "$_track_ref" && -n "$_branch" && "$_branch" != "HEAD" ]]; then
+        _track_ref=$(git -C "$dir" for-each-ref --count=1 --format='%(refname:short)' "refs/remotes/*/$_branch" 2>/dev/null)
+    fi
+    SL[_raw.git.tracking_ref]="$_track_ref"
+    SL[_raw.git.sync_vs_default]=false
+    if [[ -n "$_track_ref" ]]; then
+        _rev_counts=$(git -C "$dir" --no-optional-locks rev-list --left-right --count "HEAD...$_track_ref" 2>/dev/null)
     else
+        # No remote knows this branch. Counting against the default branch is
+        # still useful, but it does NOT mean "unpushed", so flag it for the
+        # renderer.
         local _default_branch="${SL[_raw.git.default_branch]}"
         local _main_ref=""
         for _mb in "$_default_branch" develop main master; do
@@ -534,6 +545,7 @@ sl_input_git() {
             git -C "$dir" --no-optional-locks rev-parse --verify "origin/$_mb" >/dev/null 2>&1 && _main_ref="origin/$_mb" && break
         done
         [[ -n "$_main_ref" ]] && _rev_counts=$(git -C "$dir" --no-optional-locks rev-list --left-right --count "HEAD...$_main_ref" 2>/dev/null)
+        SL[_raw.git.sync_vs_default]=true
     fi
     if [[ -n "$_rev_counts" ]]; then
         local _ahead _behind
@@ -635,8 +647,9 @@ sl_input_pr() {
     [[ -n "$_branch" ]] || return
     [[ "$_branch" != "$_default_branch" ]] || return
 
-    # Only fetch if branch is pushed to remote (mirrors fetch_pr)
-    git -C "$_dir" rev-parse --verify "origin/$_branch" >/dev/null 2>&1 || return
+    # Only fetch if the branch is on some remote. sl_input_git resolves that
+    # across all remotes; testing origin/<branch> alone hides every fork PR.
+    [[ -n "${SL[_raw.git.tracking_ref]:-}" ]] || return
 
     local _pr_json
     _pr_json=$(cd "$_dir" && gh pr view --json number,isDraft,mergeable,reviewDecision,statusCheckRollup,comments 2>/dev/null)
@@ -813,8 +826,12 @@ sl_build_repo_git_sync() {
     local _a="${SL[_raw.git.ahead]:-0}" _b="${SL[_raw.git.behind]:-0}"
     (( _a > 0 || _b > 0 )) 2>/dev/null || return
     local _text=""
-    (( _a > 0 )) && _text="${_text} ↑${_a}"
-    (( _b > 0 )) && _text="${_text} ↓${_b}"
+    # With no tracking ref the counts are against the default branch, not a
+    # remote. A bare arrow there reads as "unpushed" and is wrong, so mark it.
+    local _mark=""
+    [[ "${SL[_raw.git.sync_vs_default]:-}" == "true" ]] && _mark="?"
+    (( _a > 0 )) && _text="${_text} ↑${_a}${_mark}"
+    (( _b > 0 )) && _text="${_text} ↓${_b}${_mark}"
     SL[repo.git_sync.text]="$_text"
     SL[repo.git_sync.visible]=true
 }
