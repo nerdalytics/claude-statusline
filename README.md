@@ -331,7 +331,7 @@ git repository.
 | **pr_state**     | Draft indicator.                                                                                                                              | The PR is a draft                          | `✎`                        |
 | **pr_review**    | Review decision.                                                                                                                              | A review decision exists                   | `✓` / `✗` / `⋯`             |
 | **pr_comments**  | Comment count.                                                                                                                                | PR has ≥ 1 comment                         | `✉ 3`                      |
-| **git_sync**     | Ahead/behind counts vs. upstream, or vs. the default branch when no upstream is set.                                                          | Branch diverges from remote                | `↑2 ↓1`                    |
+| **git_sync**     | Ahead/behind counts vs. the branch's remote-tracking ref on any remote. With no such ref the counts are vs. the default branch and carry `?`.  | Branch diverges from remote                | `↑2 ↓1` / `↑2?`            |
 | **pr_mergeable** | Conflict warning.                                                                                                                             | PR mergeable status is `CONFLICTING`       | `⚠`                        |
 | **pr_checks**    | CI summary. Pending, failed, and passed counts. Compact form when everything passes.                                                          | PR has ≥ 1 status check                    | `✓12` / `○2 ✗1 ✓9`          |
 | **git_dirty**    | Lines added, lines deleted, files changed vs. HEAD.                                                                                           | Working tree has uncommitted changes       | `+45 -12 ~3`               |
@@ -365,6 +365,7 @@ Appears when at least one tool has been used this session.
 | `✉`   | PR comments                                 | REPO                                             |
 | `↑`   | Commits ahead of remote                     | REPO                                             |
 | `↓`   | Commits behind remote                       | REPO                                             |
+| `?`   | Count is vs. the default branch, because no remote has this branch | REPO                        |
 | `⚠`   | Merge conflict                              | REPO                                             |
 | `+`   | Lines added                                 | REPO                                             |
 | `-`   | Lines deleted                               | REPO                                             |
